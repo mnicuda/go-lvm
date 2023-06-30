@@ -49,13 +49,18 @@ var tagRegexp = regexp.MustCompile("^[A-Za-z0-9_+.][A-Za-z0-9_+.-]*$")
 const ErrTagInvalidLength = simpleError("lvm: Tag length must be between 1 and 1024 characters")
 const ErrTagHasInvalidChars = simpleError("lvm: Tag must consist of only [A-Za-z0-9_+.-] and cannot start with a '-'")
 
+type VolumeGroup struct {
+	Name string		`json:"name"`
+}
+
 type PhysicalVolume struct {
-	dev string
+	Dev string		`json:"device"`
+	Vg VolumeGroup	`json:"volume_group"`
 }
 
 // Remove removes the physical volume.
 func (pv *PhysicalVolume) Remove() error {
-	if err := run("pvremove", nil, pv.dev); err != nil {
+	if err := run("pvremove", nil, pv.Dev); err != nil {
 		return err
 	}
 	return nil
@@ -63,23 +68,15 @@ func (pv *PhysicalVolume) Remove() error {
 
 // Check runs the pvck command on the physical volume.
 func (pv *PhysicalVolume) Check() error {
-	if err := run("pvck", nil, pv.dev); err != nil {
+	if err := run("pvck", nil, pv.Dev); err != nil {
 		return err
 	}
 	return nil
 }
 
-type VolumeGroup struct {
-	name string
-}
-
-func (vg *VolumeGroup) Name() string {
-	return vg.name
-}
-
 // Check runs the vgck command on the volume group.
 func (vg *VolumeGroup) Check() error {
-	if err := run("vgck", nil, vg.name); err != nil {
+	if err := run("vgck", nil, vg.Name); err != nil {
 		return err
 	}
 	return nil
@@ -88,7 +85,7 @@ func (vg *VolumeGroup) Check() error {
 // BytesTotal returns the current size in bytes of the volume group.
 func (vg *VolumeGroup) BytesTotal() (uint64, error) {
 	result := new(vgsOutput)
-	if err := run("vgs", result, "--options=vg_size", vg.name); err != nil {
+	if err := run("vgs", result, "--options=vg_size", vg.Name); err != nil {
 		if IsVolumeGroupNotFound(err) {
 			return 0, ErrVolumeGroupNotFound
 		}
@@ -115,7 +112,7 @@ func (vg *VolumeGroup) BytesFree(raid VolumeLayout) (uint64, error) {
 		return 0, nil
 	}
 	result := new(vgsOutput)
-	if err := run("vgs", result, "--options=vg_free,vg_free_count,vg_extent_size", vg.name); err != nil {
+	if err := run("vgs", result, "--options=vg_free,vg_free_count,vg_extent_size", vg.Name); err != nil {
 		if IsVolumeGroupNotFound(err) {
 			return 0, ErrVolumeGroupNotFound
 		}
@@ -166,7 +163,7 @@ func (r VolumeLayout) extentsFree(count uint64) uint64 {
 // ExtentSize returns the size in bytes of a single extent.
 func (vg *VolumeGroup) ExtentSize() (uint64, error) {
 	result := new(vgsOutput)
-	if err := run("vgs", result, "--options=vg_extent_size", vg.name); err != nil {
+	if err := run("vgs", result, "--options=vg_extent_size", vg.Name); err != nil {
 		if IsVolumeGroupNotFound(err) {
 			return 0, ErrVolumeGroupNotFound
 		}
@@ -183,7 +180,7 @@ func (vg *VolumeGroup) ExtentSize() (uint64, error) {
 // ExtentCount returns the number of extents.
 func (vg *VolumeGroup) ExtentCount() (uint64, error) {
 	result := new(vgsOutput)
-	if err := run("vgs", result, "--options=vg_extent_count", vg.name); err != nil {
+	if err := run("vgs", result, "--options=vg_extent_count", vg.Name); err != nil {
 		if IsVolumeGroupNotFound(err) {
 			return 0, ErrVolumeGroupNotFound
 		}
@@ -210,7 +207,7 @@ func (vg *VolumeGroup) ExtentFreeCount(raid VolumeLayout) (uint64, error) {
 		return 0, nil
 	}
 	result := new(vgsOutput)
-	if err := run("vgs", result, "--options=vg_free_count,vg_extent_size", vg.name); err != nil {
+	if err := run("vgs", result, "--options=vg_free_count,vg_extent_size", vg.Name); err != nil {
 		if IsVolumeGroupNotFound(err) {
 			return 0, ErrVolumeGroupNotFound
 		}
@@ -356,7 +353,7 @@ func (vg *VolumeGroup) CreateLogicalVolume(name string, sizeInBytes uint64, tags
 	}
 	args = append(args, fmt.Sprintf("--size=%db", sizeInBytes))
 	args = append(args, "--name="+name)
-	args = append(args, vg.name)
+	args = append(args, vg.Name)
 	opts := new(LVOpts)
 	for _, fn := range optFns {
 		if fn != nil {
@@ -455,7 +452,7 @@ func LVMatchTag(tag string) func(lvsItem) bool {
 // with the given name.
 func (vg *VolumeGroup) FindLogicalVolume(matchFirst func(lvsItem) bool) (*LogicalVolume, error) {
 	result := new(lvsOutput)
-	if err := run("lvs", result, "--options=lv_name,lv_size,vg_name,lv_tags", vg.Name()); err != nil {
+	if err := run("lvs", result, "--options=lv_name,lv_size,vg_name,lv_tags", vg.Name); err != nil {
 		if IsLogicalVolumeNotFound(err) {
 			return nil, ErrLogicalVolumeNotFound
 		}
@@ -463,7 +460,7 @@ func (vg *VolumeGroup) FindLogicalVolume(matchFirst func(lvsItem) bool) (*Logica
 	}
 	for _, report := range result.Report {
 		for _, lv := range report.Lv {
-			if lv.VgName != vg.Name() {
+			if lv.VgName != vg.Name {
 				continue
 			}
 			if matchFirst != nil && !matchFirst(lv) {
@@ -479,12 +476,12 @@ func (vg *VolumeGroup) FindLogicalVolume(matchFirst func(lvsItem) bool) (*Logica
 func (vg *VolumeGroup) ListLogicalVolumeNames() ([]string, error) {
 	var names []string
 	result := new(lvsOutput)
-	if err := run("lvs", result, "--options=lv_name,vg_name", vg.name); err != nil {
+	if err := run("lvs", result, "--options=lv_name,vg_name", vg.Name); err != nil {
 		return nil, err
 	}
 	for _, report := range result.Report {
 		for _, lv := range report.Lv {
-			if lv.VgName == vg.name {
+			if lv.VgName == vg.Name {
 				names = append(names, lv.Name)
 			}
 		}
@@ -549,7 +546,7 @@ func (vg *VolumeGroup) ListPhysicalVolumeNames() ([]string, error) {
 	}
 	for _, report := range result.Report {
 		for _, pv := range report.Pv {
-			if pv.VgName == vg.name {
+			if pv.VgName == vg.Name {
 				names = append(names, pv.Name)
 			}
 		}
@@ -560,7 +557,7 @@ func (vg *VolumeGroup) ListPhysicalVolumeNames() ([]string, error) {
 // Tags returns the volume group tags.
 func (vg *VolumeGroup) Tags() ([]string, error) {
 	result := new(vgsOutput)
-	if err := run("vgs", result, "--options=vg_tags", vg.name); err != nil {
+	if err := run("vgs", result, "--options=vg_tags", vg.Name); err != nil {
 		if IsVolumeGroupNotFound(err) {
 			return nil, ErrVolumeGroupNotFound
 		}
@@ -584,30 +581,22 @@ func (vg *VolumeGroup) Tags() ([]string, error) {
 
 // Remove removes the volume group from disk.
 func (vg *VolumeGroup) Remove() error {
-	if err := run("vgremove", nil, "-f", vg.name); err != nil {
+	if err := run("vgremove", nil, "-f", vg.Name); err != nil {
 		return err
 	}
 	return nil
 }
 
 type LogicalVolume struct {
-	name        string
-	sizeInBytes uint64
-	vg          *VolumeGroup
-}
-
-func (lv *LogicalVolume) Name() string {
-	return lv.name
-}
-
-func (lv *LogicalVolume) SizeInBytes() uint64 {
-	return lv.sizeInBytes
+	Name        string			`json:"name"`
+	SizeInBytes uint64			`json:"size_in_bytes"`
+	Vg          *VolumeGroup	`json:"volume_group"`
 }
 
 // Path returns the device path for the logical volume.
 func (lv *LogicalVolume) Path() (string, error) {
 	result := new(lvsOutput)
-	if err := run("lvs", result, "--options=lv_path", lv.vg.name+"/"+lv.name); err != nil {
+	if err := run("lvs", result, "--options=lv_path", lv.Vg.Name+"/"+lv.Name); err != nil {
 		if IsLogicalVolumeNotFound(err) {
 			return "", ErrLogicalVolumeNotFound
 		}
@@ -624,7 +613,7 @@ func (lv *LogicalVolume) Path() (string, error) {
 // Tags returns the volume group tags.
 func (lv *LogicalVolume) Tags() ([]string, error) {
 	result := new(lvsOutput)
-	if err := run("lvs", result, "--options=lv_tags", lv.vg.name+"/"+lv.name); err != nil {
+	if err := run("lvs", result, "--options=lv_tags", lv.Vg.Name+"/"+lv.Name); err != nil {
 		if IsLogicalVolumeNotFound(err) {
 			return nil, ErrLogicalVolumeNotFound
 		}
@@ -639,18 +628,19 @@ func (lv *LogicalVolume) Tags() ([]string, error) {
 }
 
 func (lv *LogicalVolume) Remove() error {
-	if err := run("lvremove", nil, "-f", lv.vg.name+"/"+lv.name); err != nil {
+	if err := run("lvremove", nil, "-f", lv.Vg.Name+"/"+lv.Name); err != nil {
 		return err
 	}
 	return nil
 }
 
 func (lv *LogicalVolume) Extend(size string, resizeFS bool) error {
-	args := []string{"-L", size} // [+]LogicalVolumeSize[bBsSkKmMgGtTpPeE]
+	// Need a read-write lock in order to extend the lv. Therefore, overwrite global config
+	args := []string{"--config", "global {locking_type=1}", "-L", size} // [+]LogicalVolumeSize[bBsSkKmMgGtTpPeE]
 	if resizeFS {
 		args = append(args, "-r")
 	}
-	args = append(args, lv.vg.name+"/"+lv.name)
+	args = append(args, lv.Vg.Name+"/"+lv.Name)
 	if err := run("lvextend", nil, args...); err != nil {
 		return err
 	}
@@ -658,11 +648,11 @@ func (lv *LogicalVolume) Extend(size string, resizeFS bool) error {
 }
 
 func (lv *LogicalVolume) ExtendWithLogicalExtents(extend string, resizeFS bool) error {
-	args := []string{"-l", extend} // [+]LogicalExtentsNumber[%{VG|LV|PVS|FREE|ORIGIN}]
+	args := []string{"--config", "global {locking_type=1}", "-l", extend} // [+]LogicalExtentsNumber[%{VG|LV|PVS|FREE|ORIGIN}]
 	if resizeFS {
 		args = append(args, "-r")
 	}
-	args = append(args, lv.vg.name+"/"+lv.name)
+	args = append(args, lv.Vg.Name+"/"+lv.Name)
 	if err := run("lvextend", nil, args...); err != nil {
 		return err
 	}
@@ -680,16 +670,32 @@ func PVScan(dev string) error {
 	return run("pvscan", nil, args...)
 }
 
-// VGScan runs the `vgscan --cache <name>` command. It scans for the
+// VGScan runs the `vgscan --cache --mknodes <name>` command. It scans for the
 // volume group and adds it to the LVM metadata cache if `lvmetad`
-// is running. If `name` is an empty string, it scans all volume groups.
+// is running. It adds/removes any required/obsolete entries in /dev. If `name`
+// is an empty string, it scans all volume groups.
 func VGScan(name string) error {
-	args := []string{"--cache"}
+	args := []string{"--cache", "--mknodes"}
 	if name != "" {
 		args = append(args, name)
 	}
 	return run("vgscan", nil, args...)
 }
+
+// VGChange runs the `vgchange -ay <name>` command. It activates any logical
+// volumes that are associated with the <name> volume group. If `name` is an
+// empty string, it activates logical volumes on all volume groups. The block
+// device for each LV is added to the system using device-mapper in
+// the kernel.  A symbolic link /dev/VGName/LVName pointing to the device node
+// is also added
+func VGChange(name string) error {
+	args := []string{"-ay"}
+	if name != "" {
+		args = append(args, name)
+	}
+	return run("vgchange", nil, args...)
+}
+
 
 // CreateVolumeGroup creates a new volume group.
 func CreateVolumeGroup(
@@ -710,7 +716,7 @@ func CreateVolumeGroup(
 	}
 	args = append(args, name)
 	for _, pv := range pvs {
-		args = append(args, pv.dev)
+		args = append(args, pv.Dev)
 	}
 	if err := run("vgcreate", nil, args...); err != nil {
 		return nil, err
@@ -826,7 +832,9 @@ func CreatePhysicalVolume(dev string) (*PhysicalVolume, error) {
 	if err := run("pvcreate", nil, dev); err != nil {
 		return nil, fmt.Errorf("lvm: CreatePhysicalVolume: %v", err)
 	}
-	return &PhysicalVolume{dev}, nil
+	pv := new(PhysicalVolume)
+	pv.Dev = dev
+	return pv, nil
 }
 
 type pvsOutput struct {
@@ -847,7 +855,7 @@ func ListPhysicalVolumes() ([]*PhysicalVolume, error) {
 	var pvs []*PhysicalVolume
 	for _, report := range result.Report {
 		for _, pv := range report.Pv {
-			pvs = append(pvs, &PhysicalVolume{pv.Name})
+			pvs = append(pvs, &PhysicalVolume{pv.Name, VolumeGroup{Name: pv.VgName}})
 		}
 	}
 	return pvs, nil
@@ -864,7 +872,7 @@ func LookupPhysicalVolume(name string) (*PhysicalVolume, error) {
 	}
 	for _, report := range result.Report {
 		for _, pv := range report.Pv {
-			return &PhysicalVolume{pv.Name}, nil
+			return &PhysicalVolume{pv.Name, VolumeGroup{Name: pv.VgName}}, nil
 		}
 	}
 	return nil, ErrPhysicalVolumeNotFound
@@ -873,6 +881,7 @@ func LookupPhysicalVolume(name string) (*PhysicalVolume, error) {
 // Extent sizing for linear logical volumes:
 // https://github.com/Jajcus/lvm2/blob/266d6564d7a72fcff5b25367b7a95424ccf8089e/lib/metadata/metadata.c#L983
 
+// Run lvm <cmd> <args>
 func run(cmd string, v interface{}, extraArgs ...string) error {
 	// lvmlock can be nil, as it is a global variable that is intended to be
 	// initialized from calling code outside this package. We have no way of
@@ -899,7 +908,9 @@ func run(cmd string, v interface{}, extraArgs ...string) error {
 		args = append(args, "--nosuffix")
 	}
 	args = append(args, extraArgs...)
-	c := exec.Command(cmd, args...)
+	// Prepend the <cmd> as the first argument to lvm
+	args = append([]string{cmd}, args...)
+	c := exec.Command("lvm", args...)
 	log.Printf("Executing: %v", c)
 	stdout, stderr := new(bytes.Buffer), new(bytes.Buffer)
 	c.Stdout = stdout

@@ -1,4 +1,4 @@
-module github.com/filcloud/lvm
+module github.com/mnicuda/go-lvm
 
 go 1.13
 
